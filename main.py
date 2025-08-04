@@ -1,55 +1,38 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import openai
+
+from fastapi import FastAPI, Request, Form
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.templating import Jinja2Templates
+from weasyprint import HTML
+from uuid import uuid4
 import os
 
 app = FastAPI()
+templates = Jinja2Templates(directory="templates")
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+@app.get("/novo", response_class=HTMLResponse)
+async def novo_contrato(request: Request):
+    return templates.TemplateResponse("formulario.html", {"request": request})
 
-class ContractRequest(BaseModel):
-    nome_profissional: str
-    cpf_profissional: str
-    nome_cliente: str
-    cpf_cliente: str
-    descricao_servico: str
-    valor: str
-    data_inicio: str
-    data_fim: str
-    local: str
-    plano: str
+@app.post("/gerar", response_class=HTMLResponse)
+async def gerar_contrato(
+    request: Request,
+    nome: str = Form(...),
+    servico: str = Form(...),
+    valor: str = Form(...),
+    data_servico: str = Form(...)
+):
+    html_content = templates.get_template("modelo.html").render({
+        "nome": nome,
+        "servico": servico,
+        "valor": valor,
+        "data_servico": data_servico
+    })
+    filename = f"contrato_{uuid4().hex}.pdf"
+    output_path = os.path.join("pdfs", filename)
+    os.makedirs("pdfs", exist_ok=True)
+    HTML(string=html_content).write_pdf(output_path)
+    return templates.TemplateResponse("sucesso.html", {"request": request, "pdf_url": f"/download/{filename}"})
 
-@app.post("/generate_contract")
-def generate_contract(data: ContractRequest):
-    if data.plano == "basico":
-        pass
-
-    prompt = f"""
-Crie um contrato de prestação de serviços com linguagem simples e clara. Dados:
-
-Profissional: {data.nome_profissional}, CPF: {data.cpf_profissional}
-Cliente: {data.nome_cliente}, CPF: {data.cpf_cliente}
-Serviço: {data.descricao_servico}
-Valor: R$ {data.valor}
-Período: de {data.data_inicio} até {data.data_fim}
-Local do serviço: {data.local}
-
-Escreva o contrato com clareza, tom respeitoso e com frases curtas. Não use termos jurídicos complexos.
-"""
-
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "Você é um redator jurídico que cria contratos simples para autônomos."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.4,
-            max_tokens=800
-        )
-
-        contrato = response['choices'][0]['message']['content']
-        return {"contrato": contrato}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/download/{filename}", response_class=FileResponse)
+async def download_pdf(filename: str):
+    return FileResponse(path=f"pdfs/{filename}", media_type="application/pdf", filename=filename)
